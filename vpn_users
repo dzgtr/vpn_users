@@ -1,0 +1,51 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Spreadsheet::Read;
+
+no warnings qw(void once uninitialized); # turns off warnings when sheet cell is empty
+
+=pod
+requirements:
+cpan Spreadsheet::Read
+cpan Spreadsheet::ReadSXC
+=cut
+
+my $userfile_path = "./users/";
+my $nftablesfile_path = "./nftables/";
+my $vpn_mask = "255.255.248.0";
+my $file = ReadData("vpn-users.ods");
+
+my $sheet = $file->[1]; 
+my $maxcol = $sheet->{maxcol};
+my $maxrow = $sheet->{maxrow};
+
+open(NFTABLES_CONF, ">", join("", $nftablesfile_path, "nftables-user.conf")) or die $!;
+
+sub convert_netmask {
+        my $binmask = reverse(sprintf("%032s", "1" x $_[0])); # subnet mask in binary 32 digit string
+        my @mask_ip = ($binmask =~ m/......../g );
+        my $final_mask = join(".", oct("0b".$mask_ip[0]), oct("0b".$mask_ip[1]),oct("0b".$mask_ip[2]),oct("0b".$mask_ip[3]));
+	return $final_mask;
+}
+
+for(my $row=1; $row<=$maxrow;$row++){
+    my $userip = $sheet->{cr2cell(1,$row)};
+    if ($userip =~ /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/){
+        open VPN_USER_CONF, ">", "${userfile_path}$sheet->{cr2cell(2,$row)}"; #creates user files
+        print VPN_USER_CONF "ifconfig-push $sheet->{cr2cell(1,$row)} $vpn_mask\n";
+        print NFTABLES_CONF "# $sheet->{cr2cell(2,$row)}\n";
+        for(my $column=1; $column<=$maxcol;$column++){
+            if ($sheet->{cr2cell($column,$row)} =~ /x/){
+                print NFTABLES_CONF "ip saddr $sheet->{cr2cell(1,$row)} ip daddr $sheet->{cr2cell($column,2)} accept\n";
+                my $stripped_ip = $sheet->{cr2cell($column,2)} =~ s/\/\d*//r; # VPN IP adress stripped of subnet mask
+                my $vpn_mask = $sheet->{cr2cell($column,2)} =~ s/.*\///r; # VPN subnet mask in decimal stripped off IP
+                my $final_mask = convert_netmask($vpn_mask);
+                print VPN_USER_CONF "push \"route $stripped_ip $final_mask\" \n";
+            }
+        }
+        print NFTABLES_CONF "\n";
+        close(VPN_USER_CONF);
+    }
+}
+close(NFTABLES_CONF);
